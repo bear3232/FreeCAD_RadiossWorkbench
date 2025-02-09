@@ -8,7 +8,7 @@ import ObjectsFem
 
 class RadiossMaterial:
     def GetResources(self):
-        return {'Pixmap': 'fem-material',
+        return {'Pixmap': '',
                 'MenuText': 'Add Radioss Material',
                 'ToolTip': 'Add a material for Radioss analysis'}
 
@@ -34,7 +34,7 @@ class RadiossMaterial:
 
 class RadiossConstraint:
     def GetResources(self):
-        return {'Pixmap': 'fem-constraint',
+        return {'Pixmap': '',
                 'MenuText': 'Add Radioss Constraint',
                 'ToolTip': 'Add a constraint for Radioss analysis'}
 
@@ -49,7 +49,7 @@ class RadiossConstraint:
 
 class RadiossLoad:
     def GetResources(self):
-        return {'Pixmap': 'fem-force',
+        return {'Pixmap': '',
                 'MenuText': 'Add Radioss Load',
                 'ToolTip': 'Add a load for Radioss analysis'}
 
@@ -64,7 +64,7 @@ class RadiossLoad:
 
 class RadiossSet:
     def GetResources(self):
-        return {'Pixmap': 'fem-set',
+        return {'Pixmap': '',
                 'MenuText': 'Create Radioss Set',
                 'ToolTip': 'Create a node or element set for Radioss'}
 
@@ -81,7 +81,7 @@ class RadiossSet:
 
 class RadiossAnalysis:
     def GetResources(self):
-        return {'Pixmap': 'fem-analysis',
+        return {'Pixmap': '',
                 'MenuText': 'Create Radioss Analysis',
                 'ToolTip': 'Creates a new Radioss analysis'}
 
@@ -102,7 +102,7 @@ class RadiossAnalysis:
 
 class RadiossAnalysisProperties:
     def GetResources(self):
-        return {'Pixmap': 'fem-solver',
+        return {'Pixmap': '',
                 'MenuText': 'Radioss Analysis Properties',
                 'ToolTip': 'Set Radioss analysis properties'}
 
@@ -144,7 +144,7 @@ class RadiossAnalysisProperties:
 
 class RadiossExport:
     def GetResources(self):
-        return {'Pixmap': 'fem-export',
+        return {'Pixmap': '',
                 'MenuText': 'Export to Radioss',
                 'ToolTip': 'Export the model to Radioss format'}
 
@@ -421,7 +421,7 @@ class RadiossExport:
 
 class RadiossImport:
     def GetResources(self):
-        return {'Pixmap': 'fem-import',
+        return {'Pixmap': '',
                 'MenuText': 'Import Radioss Model',
                 'ToolTip': 'Import a Radioss model file'}
 
@@ -757,7 +757,7 @@ class RadiossFileParser:
 
 class RadiossRigidBody:
     def GetResources(self):
-        return {'Pixmap': 'fem-rigid-body',
+        return {'Pixmap': '',
                 'MenuText': 'Add Rigid Body',
                 'ToolTip': 'Create a rigid body definition'}
 
@@ -799,7 +799,7 @@ class RadiossRigidBody:
 
 class RadiossContact:
     def GetResources(self):
-        return {'Pixmap': 'fem-contact',
+        return {'Pixmap': '',
                 'MenuText': 'Add Contact',
                 'ToolTip': 'Create a contact definition'}
 
