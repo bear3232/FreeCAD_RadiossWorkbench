@@ -5,6 +5,11 @@ import Part
 import os
 from PySide2.QtWidgets import QFileDialog
 import ObjectsFem
+from types import SimpleNamespace
+import Fem  # FemMeshのために追加
+
+# from femtools.femutils import FemMesh の代わりに以下を使用
+FemMesh = Fem.FemMesh  # FemMeshクラスの取得
 
 class RadiossMaterial:
     def GetResources(self):
@@ -86,13 +91,20 @@ class RadiossAnalysis:
                 'ToolTip': 'Creates a new Radioss analysis'}
 
     def Activated(self):
-        import FemGui
-        analysis = FemGui.getActiveAnalysis()
-        if not analysis:
-            analysis = FemGui.createAnalysis('Analysis')
+        import ObjectsFem
         
-        # Add specific Radioss properties/settings here
-        analysis.addProperty("App::PropertyString", "SolverType", "Radioss", "Solver Type").SolverType = "OpenRadioss"
+        # アクティブな解析を取得
+        analysis = FemGui.getActiveAnalysis()
+        
+        # 解析オブジェクトが存在しない場合は新規作成
+        if not analysis:
+            analysis = ObjectsFem.makeAnalysis(FreeCAD.ActiveDocument, 'Analysis')
+            FreeCAD.ActiveDocument.recompute()
+        
+        # Radioss固有のプロパティを追加
+        if not hasattr(analysis, "SolverType"):
+            analysis.addProperty("App::PropertyString", "SolverType", "Radioss", "Solver Type")
+        analysis.SolverType = "OpenRadioss"
         
         FreeCAD.ActiveDocument.recompute()
         return
@@ -435,19 +447,29 @@ class RadiossImport:
         # 新しい解析オブジェクトを作成
         analysis = FemGui.getActiveAnalysis()
         if not analysis:
-            analysis = FemGui.createAnalysis('Analysis')
+            analysis = ObjectsFem.makeAnalysis(FreeCAD.ActiveDocument, 'Analysis')
+            FreeCAD.ActiveDocument.recompute()
 
         self.import_radioss(analysis, filename[0])
 
     def import_radioss(self, analysis, filepath):
         """RadiossファイルをインポートしてFreeCADオブジェクトを作成"""
+        FreeCAD.Console.PrintLog(f"Importing Radioss file: {filepath}\n")
         try:
+            print(f"Reading file: {filepath}\n")
             with open(filepath, 'r') as f:
                 lines = f.readlines()
 
+            print(f"Parsing {len(lines)} lines\n")
             # パーサーの初期化
             parser = RadiossFileParser()
             model_data = parser.parse(lines)
+
+            # パース結果の確認
+            print(f"Parsed data summary:\n")
+            print(f"Nodes: {len(model_data.nodes)}\n")
+            print(f"Elements: {len(model_data.elements)}\n")
+            print(f"Materials: {len(model_data.materials)}\n")
 
             # FreeCADオブジェクトの作成
             self.create_freecad_objects(analysis, model_data)
@@ -459,159 +481,170 @@ class RadiossImport:
 
     def create_freecad_objects(self, analysis, model_data):
         """パースしたデータからFreeCADオブジェクトを作成"""
-        # メッシュの作成
-        if model_data.nodes and model_data.elements:
-            mesh = self.create_mesh(model_data.nodes, model_data.elements)
-            analysis.addObject(mesh)
+        print(f"Creating FreeCAD objects\n")
+        FreeCAD.Console.PrintLog(f"Creating FreeCAD objects\n")
+        try:
+            # メッシュの作成
+            if model_data.nodes and model_data.elements:
+                mesh = self.create_mesh(model_data.nodes, model_data.elements)
+                analysis.addObject(mesh)
 
-        # 材料の作成
-        for mat in model_data.materials:
-            material = self.create_material(mat)
-            analysis.addObject(material)
+            # 材料の作成
+            for mat in model_data.materials:
+                material = self.create_material(mat)
+                analysis.addObject(material)
 
-        # セットの作成
-        for set_data in model_data.sets:
-            set_obj = self.create_set(set_data)
-            analysis.addObject(set_obj)
+            # セットの作成
+            for set_data in model_data.sets:
+                set_obj = self.create_set(set_data)
+                analysis.addObject(set_obj)
 
-        # 境界条件の作成
-        for constraint in model_data.constraints:
-            const_obj = self.create_constraint(constraint)
-            analysis.addObject(const_obj)
+            # 境界条件の作成
+            for const in model_data.constraints:
+                constraint = self.create_constraint(const)
+                analysis.addObject(constraint)
 
-        # 荷重の作成
-        for load in model_data.loads:
-            load_obj = self.create_load(load)
-            analysis.addObject(load_obj)
-        
-        # 剛体の作成
-        for rbody_data in model_data.rbodies:
-            rbody_obj = self.create_rbody(rbody_data)
-            analysis.addObject(rbody_obj)
-        
-        # 接触の作成
-        for contact_data in model_data.contacts:
-            contact_obj = self.create_contact(contact_data)
-            analysis.addObject(contact_obj)
-    
-    def create_rbody(self, rbody_data):
-        """剛体オブジェクトの作成"""
-        rbody = FreeCAD.ActiveDocument.addObject("App::FeaturePython", f"RBody_{rbody_data['name']}")
-        rbody.addProperty("App::PropertyString", "RBodyName", "RBody", "Name of rigid body")
-        rbody.RBodyName = rbody_data['name']
-        
-        # 質量と重心の設定
-        rbody.addProperty("App::PropertyFloat", "Mass", "RBody", "Mass of rigid body")
-        rbody.Mass = rbody_data['mass']
-        rbody.addProperty("App::PropertyVector", "CenterOfMass", "RBody", "Center of mass")
-        rbody.CenterOfMass = FreeCAD.Vector(*rbody_data['com'])
-        
-        # 慣性モーメントの設定
-        rbody.addProperty("App::PropertyVector", "Inertia", "RBody", "Inertia tensor")
-        rbody.Inertia = FreeCAD.Vector(*rbody_data['inertia'])
-        
-        # 拘束条件の設定
-        for prop in ['FixX', 'FixY', 'FixZ', 'FixRX', 'FixRY', 'FixRZ']:
-            rbody.addProperty("App::PropertyBool", prop, "Motion", f"Fix {prop[-1]} {'rotation' if 'R' in prop else 'translation'}")
-            setattr(rbody, prop, False)
-        
-        # 拘束条件の適用
-        for constraint in rbody_data['constraints']:
-            if constraint == 1: rbody.FixX = True
-            elif constraint == 2: rbody.FixY = True
-            elif constraint == 3: rbody.FixZ = True
-            elif constraint == 4: rbody.FixRX = True
-            elif constraint == 5: rbody.FixRY = True
-            elif constraint == 6: rbody.FixRZ = True
-        
-        return rbody
+            # 荷重の作成
+            for load in model_data.loads:
+                load_obj = self.create_load(load)
+                analysis.addObject(load_obj)
 
-    def create_contact(self, contact_data):
-        """接触オブジェクトの作成"""
-        contact = FreeCAD.ActiveDocument.addObject("App::FeaturePython", f"Contact_{contact_data['name']}")
-        contact.addProperty("App::PropertyString", "ContactName", "Contact", "Name of contact")
-        contact.ContactName = contact_data['name']
-        
-        # 接触タイプの設定
-        contact.addProperty("App::PropertyEnumeration", "ContactType", "Contact", "Type of contact")
-        contact.ContactType = ["TYPE7", "TYPE11", "TYPE19"]
-        contact.ContactType = contact_data['type']
-        
-        # 接触パラメータの設定
-        contact.addProperty("App::PropertyFloat", "Gap", "Parameters", "Initial gap")
-        contact.Gap = contact_data['gap']
-        contact.addProperty("App::PropertyFloat", "Friction", "Parameters", "Friction coefficient")
-        contact.Friction = contact_data['friction']
-        contact.addProperty("App::PropertyFloat", "Stiffness", "Parameters", "Contact stiffness")
-        contact.Stiffness = contact_data['stiffness']
-        contact.addProperty("App::PropertyFloat", "Damping", "Parameters", "Contact damping")
-        contact.Damping = contact_data['damping']
-        
-        return contact
-    
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Error creating objects: {str(e)}\n")
+
     def create_mesh(self, nodes, elements):
-        """ノードと要素からFEMメッシュを作成"""
-        mesh_obj = ObjectsFem.makeMeshGmsh(FreeCAD.ActiveDocument, 'FEMMesh')
-        mesh = mesh_obj.FemMesh
+        """メッシュオブジェクトの作成"""
+        try:
+            # メッシュオブジェクトの作成
+            mesh_obj = ObjectsFem.makeMeshGmsh(FreeCAD.ActiveDocument, 'FEMMesh')
+            
+            # 新しいFemMeshオブジェクトの作成
+            mesh = FemMesh()
 
-        # ノードの追加
-        for node_id, coords in nodes.items():
-            mesh.addNode(coords[0], coords[1], coords[2], node_id)
+            # ノードの追加
+            FreeCAD.Console.PrintLog(f"Adding {len(nodes)} nodes to mesh\n")
+            for node_id, coords in nodes.items():
+                try:
+                    mesh.addNode(coords[0], coords[1], coords[2], node_id)
+                except Exception as e:
+                    FreeCAD.Console.PrintError(f"Error adding node {node_id}: {str(e)}\n")
 
-        # 要素の追加
-        for elem_id, (elem_type, node_ids) in elements.items():
-            if elem_type == "SHELL":
-                mesh.addFace4Node(*node_ids, elem_id)
-            elif elem_type == "SOLID":
-                mesh.addVolume8Node(*node_ids, elem_id)
+            # 要素の追加
+            shellcount = 0
+            FreeCAD.Console.PrintLog(f"Adding {len(elements)} elements to mesh\n")
+            for elem_id, elem in elements.items():
+                try:
+                    if elem.type == "SHELL":
+                        if len(elem.nodes) == 4:
+                            mesh.addFace(elem.nodes, elem_id)
+                            shellcount += 1
+                        elif len(elem.nodes) == 3:
+                            # 3節点シェル要素
+                            mesh.addFace(elem.nodes, elem_id)
+                            shellcount += 1
+                    elif elem.type == "SOLID":
+                        if len(elem.nodes) == 8:
+                            mesh.addVolume(elem.nodes, elem_id)
+                        elif len(elem.nodes) == 4:
+                            # 4節点四面体要素
+                            mesh.addVolume(elem.nodes, elem_id)
+                except Exception as e:
+                    FreeCAD.Console.PrintError(f"Error adding element {elem_id}: {str(e)}\n")
+            print(shellcount)
+            # メッシュをオブジェクトに設定
+            mesh_obj.FemMesh = mesh
 
-        return mesh_obj
+            # シェル要素の厚さを設定
+            if hasattr(self, 'properties'):
+                for elem_id, elem in elements.items():
+                    if elem.type == "SHELL" and hasattr(elem, 'property'):
+                        try:
+                            thickness = self.get_shell_thickness(elem.property)
+                            if thickness:
+                                # 要素グループを作成して厚さを設定
+                                group_name = f"ShellThickness_{thickness}"
+                                if not hasattr(mesh_obj, group_name):
+                                    mesh_obj.addProperty("App::PropertyFloat", group_name, "Shell Thickness", 
+                                                       "Shell thickness for element group")
+                                    setattr(mesh_obj, group_name, thickness)
+                                # 要素をグループに追加
+                                if not hasattr(mesh_obj, f"{group_name}_elements"):
+                                    mesh_obj.addProperty("App::PropertyIntegerList", f"{group_name}_elements", 
+                                                       "Shell Thickness", "Elements in thickness group")
+                                getattr(mesh_obj, f"{group_name}_elements").append(elem_id)
+                        except Exception as e:
+                            FreeCAD.Console.PrintError(f"Error setting shell thickness for element {elem_id}: {str(e)}\n")
+
+            # メッシュの表示を更新
+            mesh_obj.ViewObject.DisplayMode = "Faces & Wireframe"
+            mesh_obj.ViewObject.BackfaceCulling = False
+            FreeCAD.ActiveDocument.recompute()
+                
+            FreeCAD.Console.PrintLog("Mesh creation completed\n")
+            return mesh_obj
+
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Error creating mesh: {str(e)}\n")
+            return None
+
+    def get_shell_thickness(self, prop_id):
+        """シェル要素の厚さを取得"""
+        for prop in self.properties:
+            if prop.id == prop_id and prop.type == "SHELL":
+                return prop.thickness
+        return None
 
     def create_material(self, mat_data):
         """材料プロパティオブジェクトを作成"""
-        material = ObjectsFem.makeMaterialSolid(FreeCAD.ActiveDocument, mat_data['name'])
+        material = ObjectsFem.makeMaterialSolid(FreeCAD.ActiveDocument, mat_data.name)
         material.Material = {
-            'Name': mat_data['name'],
-            'YoungsModulus': f"{mat_data['young']:f} MPa",
-            'PoissonRatio': str(mat_data['poisson']),
-            'Density': f"{mat_data['density']:f} kg/m^3",
-            'RadiossType': mat_data['law']
+            'Name': mat_data.name,
+            'YoungsModulus': f"{mat_data.E} MPa",
+            'PoissonRatio': str(mat_data.nu),
+            'Density': f"{mat_data.rho} kg/m^3",
+            'RadiossType': mat_data.type
         }
+
+        # オプションのプロパティ
+        if hasattr(mat_data, 'yield_stress'):
+            material.Material['YieldStrength'] = f"{mat_data.yield_stress} MPa"
+        if hasattr(mat_data, 'hardening'):
+            material.Material['HardeningParam'] = str(mat_data.hardening)
+
         return material
 
     def create_set(self, set_data):
         """セットオブジェクトを作成"""
-        set_obj = FreeCAD.ActiveDocument.addObject("App::FeaturePython", f"Set_{set_data['name']}")
+        set_obj = FreeCAD.ActiveDocument.addObject("App::FeaturePython", f"Set_{set_data.name}")
         set_obj.addProperty("App::PropertyString", "SetType", "Radioss", "Type of set")
-        set_obj.SetType = set_data['type']
+        set_obj.SetType = set_data.type
         set_obj.addProperty("App::PropertyIntegerList", "Members", "Radioss", "Set members")
-        set_obj.Members = set_data['members']
+        set_obj.Members = set_data.members
         return set_obj
 
     def create_constraint(self, const_data):
         """境界条件オブジェクトを作成"""
-        if const_data['type'] == 'FIXED':
-            constraint = ObjectsFem.makeConstraintFixed(FreeCAD.ActiveDocument, const_data['name'])
-            # 参照セットの設定
-            if 'references' in const_data:
-                constraint.References = const_data['references']
+        if const_data.type == 'FIXED':
+            constraint = ObjectsFem.makeConstraintFixed(FreeCAD.ActiveDocument, f"Constraint_{const_data.id}")
+            # 参照ノードの設定
+            if hasattr(const_data, 'nodes'):
+                constraint.References = [(FreeCAD.ActiveDocument.FEMMesh, 'Node' + str(n)) for n in const_data.nodes]
         return constraint
 
     def create_load(self, load_data):
         """荷重オブジェクトを作成"""
-        if load_data['type'] == 'FORCE':
-            force = ObjectsFem.makeConstraintForce(FreeCAD.ActiveDocument, load_data['name'])
-            force.Force = load_data['magnitude']
-            force.DirectionVector = load_data['direction']
-            if 'references' in load_data:
-                force.References = load_data['references']
+        force = ObjectsFem.makeConstraintForce(FreeCAD.ActiveDocument, f"Force_{load_data.id}")
+        force.Force = load_data.magnitude
+        force.DirectionVector = FreeCAD.Vector(*load_data.direction)
+        # 参照ノードの設定
+        if hasattr(load_data, 'nodes'):
+            force.References = [(FreeCAD.ActiveDocument.FEMMesh, 'Node' + str(n)) for n in load_data.nodes]
         return force
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None
 
 class RadiossFileParser:
-    """Radiossファイルのパーサー"""
     def __init__(self):
         self.nodes = {}
         self.elements = {}
@@ -619,140 +652,220 @@ class RadiossFileParser:
         self.sets = []
         self.constraints = []
         self.loads = []
+        self.properties = []  # プロパティリストを追加
         self.current_section = None
-        self.rbodies = []
-        self.contacts = []
+        self.current_subsection = None
 
     def parse(self, lines):
         """Radiossファイルを解析"""
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
+        try:
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
 
-            if line.startswith('/'):
-                self.current_section = line
-                continue
+                if line.startswith('/'):
+                    self.current_section = line
+                    FreeCAD.Console.PrintLog(f"Found section: {line}\n")
+                    continue
 
-            self.parse_section(line)
+                try:
+                    self.parse_section(line)
+                except Exception as e:
+                    FreeCAD.Console.PrintWarning(f"Warning: Failed to parse line: {line}\nError: {str(e)}\n")
 
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Parse error: {str(e)}\n")
+            
+        # パース結果のサマリーを出力
+        FreeCAD.Console.PrintLog(f"Parse completed:\n")
+        FreeCAD.Console.PrintLog(f"  Nodes: {len(self.nodes)}\n")
+        FreeCAD.Console.PrintLog(f"  Elements: {len(self.elements)}\n")
+        FreeCAD.Console.PrintLog(f"  Materials: {len(self.materials)}\n")
+        FreeCAD.Console.PrintLog(f"  Properties: {len(self.properties)}\n")
+        FreeCAD.Console.PrintLog(f"  Sets: {len(self.sets)}\n")
+        FreeCAD.Console.PrintLog(f"  Constraints: {len(self.constraints)}\n")
+        FreeCAD.Console.PrintLog(f"  Loads: {len(self.loads)}\n")
+            
         return self
 
     def parse_section(self, line):
         """セクションごとの解析"""
-        if self.current_section == '/NODE':
-            self.parse_node(line)
-        elif self.current_section.startswith('/ELEMENT'):
-            self.parse_element(line)
-        elif self.current_section.startswith('/MAT'):
-            self.parse_material(line)
-        elif self.current_section.startswith('/SET'):
-            self.parse_set(line)
-        elif self.current_section.startswith('/BOUND'):
-            self.parse_constraint(line)
-        elif self.current_section.startswith('/LOAD'):
-            self.parse_load(line)
-        elif self.current_section.startswith('/RBODY'):
-            self.parse_rbody(line)
-        elif self.current_section.startswith('/INTER'):
-            self.parse_contact(line)
-    
-    
-    def parse_rbody(self, line):
-        """剛体データの解析"""
-        if not line.startswith('/'):
-            data = line.split()
-            rbody = {
-                'name': data[0],
-                'node_set': int(data[1]),
-                'mass': float(data[2]) if len(data) > 2 else 0.0,
-                'com': [float(data[3]), float(data[4]), float(data[5])] if len(data) > 5 else [0,0,0],
-                'inertia': [float(x) for x in data[6:9]] if len(data) > 8 else [0,0,0],
-                'constraints': [int(x) for x in data[9:]] if len(data) > 9 else []
-            }
-            self.rbodies.append(rbody)
+        if not self.current_section:
+            return
 
-    def parse_contact(self, line):
-        """接触データの解析"""
-        if not line.startswith('/'):
+        # セクション名を正規化
+        section = self.current_section.upper()
+        
+        FreeCAD.Console.PrintLog(f"Parsing section: {section}, line: {line}\n")
+
+        if section.startswith('/NODE'):
+            self.parse_node(line)
+        elif section.startswith('/SHELL'):
+            prop_id = self.current_section.split('/')[2]
+            self.parse_element(line, "SHELL", prop_id)
+        elif section.startswith('/SH3N'):
+            prop_id = self.current_section.split('/')[2]
+            self.parse_element(line, "SHELL", prop_id)
+        elif section.startswith('/BRICK'):
+            prop_id = self.current_section.split('/')[2]
+            self.parse_element(line, "SOLID", prop_id)
+        elif section.startswith('/PART/'):
+            prop_id = self.current_section.split('/')[2]
+            mat_id = 1
+            self.parse_property(line, "SHELL", prop_id, mat_id)
+        elif section.startswith('/PROP/SHELL'):
+            prop_id = self.current_section.split('/')[3]
+            mat_id = 1
+            self.parse_property(line, "SHELL", prop_id, mat_id)
+        elif section.startswith('/PROP/SOLID'):
+            prop_id = self.current_section.split('/')[3]
+            mat_id = 1
+            self.parse_property(line, "SOLID", prop_id, mat_id)
+        elif section.startswith('/MAT/'):
+            self.parse_material(line)
+        elif section.startswith('/SET/'):
+            self.parse_set(line)
+        elif section.startswith('/BOUNDARY'):
+            self.parse_constraint(line)
+        elif section.startswith('/LOAD'):
+            self.parse_load(line)
+
+    def parse_property(self, line, prop_type, prop_id, mat_id):
+        """プロパティデータの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 3:  # ID + 材料ID + 厚さ/その他のパラメータ
+            try:
+                # prop_id = int(data[0])
+                # mat_id = int(data[1])
+                
+                prop = SimpleNamespace(
+                    id=prop_id,
+                    type=prop_type,
+                    material=mat_id
+                )
+
+                if prop_type == "SHELL":
+                    prop.thickness = 1.0
+                    # prop.thickness = float(data[2])
+                elif prop_type == "SOLID":
+                    # SOLIDプロパティの追加パラメータがあれば設定
+                    pass
+
+                self.properties.append(prop)
+                FreeCAD.Console.PrintLog(f"Parsed property {prop_id}: {prop_type}\n")
+            except (ValueError, IndexError) as e:
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid property data: {line}\nError: {str(e)}\n")
+
+    def parse_element(self, line, elem_type, prop_id):
+        """要素データの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 3:  # ID + ノード
+            try:
+                elem_id = int(data[0])
+                # prop_id = int(data[1])
+                nodes = []
+                for node_str in data[1:]:
+                    if node_str:
+                        nodes.append(int(node_str))
+                if nodes:
+                    self.elements[elem_id] = SimpleNamespace(
+                        id=elem_id,
+                        property=prop_id,
+                        nodes=nodes,
+                        type=elem_type
+                    )
+                    FreeCAD.Console.PrintLog(f"Parsed element {elem_id}: {elem_type}, nodes: {nodes}\n")
+            except (ValueError, IndexError) as e:
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid element data: {line}\nError: {str(e)}\n")
+
+    def clean_data(self, line):
+        """データ行をクリーンアップして分割"""
+        # カンマまたは空白で分割
+        if ',' in line:
+            data = [x.strip() for x in line.split(',')]
+        else:
             data = line.split()
-            contact = {
-                'name': data[0],
-                'type': self.current_section.split('/')[2],
-                'slave_set': int(data[1]),
-                'master_set': int(data[2]),
-                'gap': float(data[3]) if len(data) > 3 else 0.0,
-                'friction': float(data[4]) if len(data) > 4 else 0.0,
-                'stiffness': float(data[5]) if len(data) > 5 else 0.0,
-                'damping': float(data[6]) if len(data) > 6 else 0.0
-            }
-            self.contacts.append(contact)
-    
+        
+        # 空の要素を削除
+        return [x for x in data if x]
+
     def parse_node(self, line):
         """ノードデータの解析"""
-        data = line.split()
-        node_id = int(data[0])
-        coords = [float(x) for x in data[1:4]]
-        self.nodes[node_id] = coords
-
-    def parse_element(self, line):
-        """要素データの解析"""
-        data = line.split()
-        elem_id = int(data[0])
-        elem_type = self.current_section.split('/')[2]
-        node_ids = [int(x) for x in data[2:]]
-        self.elements[elem_id] = (elem_type, node_ids)
+        data = self.clean_data(line)
+        if len(data) >= 4:  # ID + 3座標
+            try:
+                node_id = int(data[0])
+                coords = [float(x) for x in data[1:4]]
+                self.nodes[node_id] = coords
+                FreeCAD.Console.PrintLog(f"Parsed node {node_id}: {coords}\n")
+            except (ValueError, IndexError) as e:
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid node data: {line}\nError: {str(e)}\n")
 
     def parse_material(self, line):
         """材料データの解析"""
-        if not line.startswith('/'):
-            data = line.split()
-            mat = {
-                'name': data[0],
-                'law': self.current_section.split('/')[2],
-                'young': float(data[1]),
-                'poisson': float(data[2]),
-                'density': float(data[3])
-            }
-            self.materials.append(mat)
+        data = self.clean_data(line)
+        if len(data) >= 5:  # 最低限必要なデータ数
+            try:
+                mat = SimpleNamespace(
+                    name=data[0],
+                    type=data[1],
+                    E=float(data[2]),
+                    nu=float(data[3]),
+                    rho=float(data[4])
+                )
+                
+                # オプションのプロパティ
+                if len(data) > 5:
+                    mat.yield_stress = float(data[5])
+                if len(data) > 6:
+                    mat.hardening = float(data[6])
+                    
+                self.materials.append(mat)
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid material data: {line}\n")
 
     def parse_set(self, line):
         """セットデータの解析"""
-        if not line.startswith('/'):
-            data = line.split()
-            set_data = {
-                'name': data[0],
-                'type': self.current_section.split('/')[2],
-                'members': [int(x) for x in data[1:]]
-            }
-            self.sets.append(set_data)
+        data = self.clean_data(line)
+        if len(data) >= 2:  # 名前 + 要素
+            try:
+                set_data = SimpleNamespace(
+                    name=data[0],
+                    type=self.current_section.split('/')[1],
+                    members=[int(x) for x in data[1:] if x]
+                )
+                self.sets.append(set_data)
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid set data: {line}\n")
 
     def parse_constraint(self, line):
         """境界条件データの解析"""
-        if not line.startswith('/'):
-            data = line.split()
-            const = {
-                'name': data[0],
-                'type': self.current_section.split('/')[2],
-                'nodes': [int(x) for x in data[1:]]
-            }
-            self.constraints.append(const)
+        data = self.clean_data(line)
+        if len(data) >= 2:  # ID + ノード
+            try:
+                nodes = [int(x) for x in data[1:] if x]
+                if nodes:
+                    self.constraints.append(SimpleNamespace(
+                        id=int(data[0]),
+                        nodes=nodes,
+                        type="FIXED"
+                    ))
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid constraint data: {line}\n")
 
     def parse_load(self, line):
         """荷重データの解析"""
-        if not line.startswith('/'):
-            data = line.split()
-            load = {
-                'name': data[0],
-                'type': self.current_section.split('/')[2],
-                'magnitude': float(data[1]),
-                'direction': FreeCAD.Vector(
-                    float(data[2]),
-                    float(data[3]),
-                    float(data[4])
-                )
-            }
-            self.loads.append(load)
+        data = self.clean_data(line)
+        if len(data) >= 5:  # ID + 大きさ + 方向(x,y,z)
+            try:
+                self.loads.append(SimpleNamespace(
+                    id=int(data[0]),
+                    magnitude=float(data[1]),
+                    direction=[float(x) for x in data[2:5]]
+                ))
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid load data: {line}\n")
 
 
 class RadiossRigidBody:
@@ -833,3 +946,326 @@ class RadiossContact:
 
     def IsActive(self):
         return FemGui.getActiveAnalysis() is not None
+
+class LsDynaImport:
+    def GetResources(self):
+        return {'Pixmap': '',
+                'MenuText': 'Import from LS-DYNA',
+                'ToolTip': 'Import an LS-DYNA model file'}
+
+    def Activated(self):
+        # ファイル選択ダイアログを表示
+        filename = QFileDialog.getOpenFileName(None, "Import LS-DYNA Model",
+                                             None, "LS-DYNA Files (*.k *.key)")
+        if not filename[0]:
+            return
+
+        # 新しい解析オブジェクトを作成
+        analysis = FemGui.getActiveAnalysis()
+        if not analysis:
+            analysis = ObjectsFem.makeAnalysis(FreeCAD.ActiveDocument, 'Analysis')
+            FreeCAD.ActiveDocument.recompute()
+
+        self.import_lsdyna(analysis, filename[0])
+
+    def import_lsdyna(self, analysis, filepath):
+        """LS-DYNAファイルをインポートしてRadiossモデルに変換"""
+        try:
+            parser = LsDynaParser()
+            model_data = parser.parse_file(filepath)
+            self.convert_to_radioss(analysis, model_data)
+            FreeCAD.ActiveDocument.recompute()
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Import error: {str(e)}\n")
+
+    def convert_to_radioss(self, analysis, dyna_data):
+        """LS-DYNAデータをRadiossオブジェクトに変換"""
+        # メッシュの変換
+        if dyna_data.nodes and dyna_data.elements:
+            mesh = self.create_mesh(dyna_data.nodes, dyna_data.elements)
+            analysis.addObject(mesh)
+
+        # 材料の変換
+        for mat in dyna_data.materials:
+            radioss_mat = self.convert_material(mat)
+            analysis.addObject(radioss_mat)
+
+        # 境界条件の変換
+        for spc in dyna_data.boundary_conditions:
+            radioss_constraint = self.convert_constraint(spc)
+            analysis.addObject(radioss_constraint)
+
+        # 荷重の変換
+        for load in dyna_data.loads:
+            radioss_load = self.convert_load(load)
+            analysis.addObject(radioss_load)
+
+        # 接触の変換
+        for contact in dyna_data.contacts:
+            radioss_contact = self.convert_contact(contact)
+            analysis.addObject(radioss_contact)
+
+    def create_mesh(self, nodes, elements):
+        """LS-DYNAメッシュデータからFEMメッシュを作成"""
+        mesh_obj = ObjectsFem.makeMeshGmsh(FreeCAD.ActiveDocument, 'FEMMesh')
+        mesh = mesh_obj.FemMesh
+
+        # ノードの追加
+        for node_id, coords in nodes.items():
+            mesh.addNode(coords[0], coords[1], coords[2], node_id)
+
+        # 要素の追加
+        for elem_id, elem_data in elements.items():
+            if elem_data.type == "SHELL":
+                mesh.addFace4Node(*elem_data.nodes, elem_id)
+            elif elem_data.type == "SOLID":
+                mesh.addVolume8Node(*elem_data.nodes, elem_id)
+
+        return mesh_obj
+
+    def create_material(self, dyna_mat):
+        """LS-DYNA材料をRadioss材料に変換"""
+        mat = ObjectsFem.makeMaterialSolid(FreeCAD.ActiveDocument, f"RadiossMaterial_{dyna_mat.id}")
+        
+        # 材料タイプの変換マッピング
+        material_mapping = {
+            'MAT_ELASTIC': 'LAW2',
+            'MAT_PLASTIC_KINEMATIC': 'LAW36',
+            'MAT_PIECEWISE_LINEAR_PLASTICITY': 'LAW36'
+        }
+
+        # 基本的な材料プロパティの設定
+        mat.Material = {
+            'Name': dyna_mat.name,
+            'YoungsModulus': f"{dyna_mat.E} MPa",
+            'PoissonRatio': str(dyna_mat.nu),
+            'Density': f"{dyna_mat.rho} kg/m^3",
+            'RadiossType': material_mapping.get(dyna_mat.type, 'LAW2')
+        }
+
+        # 降伏応力と硬化パラメータの設定
+        if hasattr(dyna_mat, 'yield_stress'):
+            mat.Material['YieldStrength'] = f"{dyna_mat.yield_stress} MPa"
+        if hasattr(dyna_mat, 'tangent_modulus'):
+            mat.Material['HardeningParam'] = str(dyna_mat.tangent_modulus)
+
+        return mat
+
+    def convert_constraint(self, dyna_spc):
+        """LS-DYNA拘束をRadioss拘束に変換"""
+        constraint = ObjectsFem.makeConstraintFixed(FreeCAD.ActiveDocument, f"RadiossConstraint_{dyna_spc.id}")
+        
+        # 拘束ノードの設定
+        if hasattr(dyna_spc, 'nodes'):
+            constraint.References = [(FreeCAD.ActiveDocument.FEMMesh, 'Node' + str(n)) for n in dyna_spc.nodes]
+        
+        return constraint
+
+    def convert_load(self, dyna_load):
+        """LS-DYNA荷重をRadioss荷重に変換"""
+        load = ObjectsFem.makeConstraintForce(FreeCAD.ActiveDocument, f"RadiossLoad_{dyna_load.id}")
+        
+        # 荷重値と方向の設定
+        if hasattr(dyna_load, 'magnitude'):
+            load.Force = dyna_load.magnitude
+        if hasattr(dyna_load, 'direction'):
+            load.DirectionVector = FreeCAD.Vector(*dyna_load.direction)
+        
+        # 荷重適用ノードの設定
+        if hasattr(dyna_load, 'nodes'):
+            load.References = [(FreeCAD.ActiveDocument.FEMMesh, 'Node' + str(n)) for n in dyna_load.nodes]
+        
+        return load
+
+    def convert_contact(self, dyna_contact):
+        """LS-DYNA接触をRadioss接触に変換"""
+        contact = FreeCAD.ActiveDocument.addObject("App::FeaturePython", f"RadiossContact_{dyna_contact.id}")
+        
+        # 接触タイプの変換マッピング
+        contact_mapping = {
+            'AUTOMATIC_SURFACE_TO_SURFACE': 'TYPE7',
+            'TIED_SURFACE_TO_SURFACE': 'TYPE2',
+            'NODES_TO_SURFACE': 'TYPE11'
+        }
+        
+        # 基本プロパティの設定
+        contact.addProperty("App::PropertyString", "ContactName", "Contact", "Name of contact")
+        contact.ContactName = f"Contact_{dyna_contact.id}"
+        
+        contact.addProperty("App::PropertyEnumeration", "ContactType", "Contact", "Type of contact")
+        contact.ContactType = ["TYPE7", "TYPE11", "TYPE19"]
+        contact.ContactType = contact_mapping.get(dyna_contact.type, 'TYPE7')
+        
+        # 接触パラメータの設定
+        if hasattr(dyna_contact, 'static_friction'):
+            contact.addProperty("App::PropertyFloat", "Friction", "Parameters", "Friction coefficient")
+            contact.Friction = dyna_contact.static_friction
+        
+        return contact
+
+    def IsActive(self):
+        return FreeCAD.ActiveDocument is not None
+
+
+class LsDynaParser:
+    """LS-DYNAキーワードファイルのパーサー"""
+    def __init__(self):
+        self.nodes = {}
+        self.elements = {}
+        self.materials = []
+        self.boundary_conditions = []
+        self.loads = []
+        self.contacts = []
+        self.current_keyword = None
+
+    def parse_file(self, filepath):
+        """LS-DYNAファイルを解析"""
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith('$'):  # コメントをスキップ
+                continue
+
+            if line.startswith('*'):
+                self.current_keyword = line[1:].strip().upper()
+                continue
+
+            try:
+                self.parse_keyword_data(line)
+            except Exception as e:
+                FreeCAD.Console.PrintWarning(f"Warning: Failed to parse line: {line}\nError: {str(e)}\n")
+
+        return self
+
+    def clean_data(self, line):
+        """データ行をクリーンアップして分割"""
+        # カンマまたは空白で分割
+        if ',' in line:
+            data = [x.strip() for x in line.split(',')]
+        else:
+            data = line.split()
+        
+        # 空の要素を削除
+        return [x for x in data if x]
+
+    def parse_keyword_data(self, line):
+        """キーワードに基づいてデータを解析"""
+        if not self.current_keyword:
+            return
+
+        if self.current_keyword.startswith('NODE'):
+            self.parse_node(line)
+        elif self.current_keyword.startswith('ELEMENT'):
+            self.parse_element(line)
+        elif self.current_keyword.startswith('MAT'):
+            self.parse_material(line)
+        elif self.current_keyword.startswith('BOUNDARY_SPC'):
+            self.parse_boundary(line)
+        elif self.current_keyword.startswith('LOAD'):
+            self.parse_load(line)
+        elif self.current_keyword.startswith('CONTACT'):
+            self.parse_contact(line)
+
+    def parse_node(self, line):
+        """ノードデータの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 4:  # ID + 3座標
+            try:
+                node_id = int(data[0])
+                coords = [float(x) for x in data[1:4]]
+                self.nodes[node_id] = coords
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid node data: {line}\n")
+
+    def parse_element(self, line):
+        """要素データの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 3:  # ID + 材料ID + ノード
+            try:
+                elem_id = int(data[0])
+                elem_type = self.current_keyword.split('_')[1] if '_' in self.current_keyword else 'SOLID'
+                nodes = []
+                for node_str in data[2:]:
+                    if node_str:
+                        nodes.append(int(node_str))
+                if nodes:
+                    self.elements[elem_id] = SimpleNamespace(type=elem_type, nodes=nodes)
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid element data: {line}\n")
+
+    def parse_material(self, line):
+        """材料データの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 4:  # ID + E + nu + rho
+            try:
+                mat_id = int(data[0])
+                material = SimpleNamespace(
+                    id=mat_id,
+                    type=self.current_keyword,
+                    name=f"Material_{mat_id}",
+                    E=float(data[1]),
+                    nu=float(data[2]),
+                    rho=float(data[3])
+                )
+                
+                # オプションのプロパティ
+                if len(data) > 4:
+                    material.yield_stress = float(data[4])
+                if len(data) > 5:
+                    material.tangent_modulus = float(data[5])
+                    
+                self.materials.append(material)
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid material data: {line}\n")
+
+    def parse_boundary(self, line):
+        """境界条件データの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 2:  # ID + ノード
+            try:
+                spc_id = int(data[0])
+                nodes = [int(x) for x in data[1:] if x]
+                if nodes:
+                    self.boundary_conditions.append(SimpleNamespace(id=spc_id, nodes=nodes))
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid boundary condition data: {line}\n")
+
+    def parse_load(self, line):
+        """荷重データの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 6:  # ID + ノード + 大きさ + 方向(x,y,z)
+            try:
+                load_id = int(data[0])
+                nodes = [int(data[1])]
+                magnitude = float(data[2])
+                direction = [float(x) for x in data[3:6]]
+                self.loads.append(SimpleNamespace(
+                    id=load_id,
+                    nodes=nodes,
+                    magnitude=magnitude,
+                    direction=direction
+                ))
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid load data: {line}\n")
+
+    def parse_contact(self, line):
+        """接触データの解析"""
+        data = self.clean_data(line)
+        if len(data) >= 1:  # 最低限ID
+            try:
+                contact_id = int(data[0])
+                contact_type = self.current_keyword.split('_', 1)[1] if '_' in self.current_keyword else 'AUTOMATIC'
+                
+                contact = SimpleNamespace(
+                    id=contact_id,
+                    type=contact_type
+                )
+                
+                if len(data) > 1:
+                    contact.static_friction = float(data[1])
+                    
+                self.contacts.append(contact)
+            except (ValueError, IndexError):
+                FreeCAD.Console.PrintWarning(f"Warning: Invalid contact data: {line}\n")

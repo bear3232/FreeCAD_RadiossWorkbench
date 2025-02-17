@@ -51,7 +51,8 @@ class RadiossWorkbench(Workbench):
         
         self.io_commands = [
             'Radioss_Import',
-            'Radioss_Export'
+            'Radioss_Export',
+            'LsDyna_Import'
         ]
 
         # コマンドの追加
@@ -65,6 +66,7 @@ class RadiossWorkbench(Workbench):
         FreeCADGui.addCommand('Radioss_Contact', RadiossCommands.RadiossContact())
         FreeCADGui.addCommand('Radioss_Export', RadiossCommands.RadiossExport())
         FreeCADGui.addCommand('Radioss_AnalysisProperties', RadiossCommands.RadiossAnalysisProperties())
+        FreeCADGui.addCommand('LsDyna_Import', RadiossCommands.LsDynaImport())
 
         # ツールバーの作成
         self.appendToolbar('Radioss Analysis', self.analysis_commands)
