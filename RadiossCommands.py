@@ -534,20 +534,21 @@ class RadiossImport:
             FreeCAD.Console.PrintLog(f"Adding {len(elements)} elements to mesh\n")
             for elem_id, elem in elements.items():
                 try:
-                    if elem.type == "SHELL":
-                        if len(elem.nodes) == 4:
-                            mesh.addFace(elem.nodes, elem_id)
-                            shellcount += 1
-                        elif len(elem.nodes) == 3:
-                            # 3節点シェル要素
-                            mesh.addFace(elem.nodes, elem_id)
-                            shellcount += 1
+                    if elem.type == 'SHELL' and len(elem.nodes) >= 4:
+                        mesh.addFace(elem.nodes, elem_id)
+                        shellcount += 1
+                    elif elem.type == 'SH3N' and len(elem.nodes) >= 3:
+                        # 3節点シェル要素
+                        mesh.addFace(elem.nodes, elem_id)
+                        shellcount += 1
                     elif elem.type == "SOLID":
                         if len(elem.nodes) == 8:
-                            mesh.addVolume(elem.nodes, elem_id)
+                            # mesh.addVolume(elem.nodes, elem_id)
+                            pass
                         elif len(elem.nodes) == 4:
                             # 4節点四面体要素
-                            mesh.addVolume(elem.nodes, elem_id)
+                            # mesh.addVolume(elem.nodes, elem_id)
+                            pass
                 except Exception as e:
                     FreeCAD.Console.PrintError(f"Error adding element {elem_id}: {str(e)}\n")
             print(shellcount)
@@ -678,6 +679,11 @@ class RadiossFileParser:
             FreeCAD.Console.PrintError(f"Parse error: {str(e)}\n")
             
         # パース結果のサマリーを出力
+        shellcount = 0
+        for elem_id, elem in self.elements.items():
+            if elem.type == "SHELL":
+                shellcount += 1
+        print(shellcount)
         FreeCAD.Console.PrintLog(f"Parse completed:\n")
         FreeCAD.Console.PrintLog(f"  Nodes: {len(self.nodes)}\n")
         FreeCAD.Console.PrintLog(f"  Elements: {len(self.elements)}\n")
@@ -706,7 +712,7 @@ class RadiossFileParser:
             self.parse_element(line, "SHELL", prop_id)
         elif section.startswith('/SH3N'):
             prop_id = self.current_section.split('/')[2]
-            self.parse_element(line, "SHELL", prop_id)
+            self.parse_element(line, "SH3N", prop_id)
         elif section.startswith('/BRICK'):
             prop_id = self.current_section.split('/')[2]
             self.parse_element(line, "SOLID", prop_id)
@@ -765,9 +771,18 @@ class RadiossFileParser:
                 elem_id = int(data[0])
                 # prop_id = int(data[1])
                 nodes = []
-                for node_str in data[1:]:
-                    if node_str:
-                        nodes.append(int(node_str))
+                if elem_type == 'SHELL':
+                    for node_str in data[1:5]:
+                        if node_str:
+                            nodes.append(int(node_str))
+                elif elem_type == 'SH3N':
+                    for node_str in data[1:4]:
+                        if node_str:
+                            nodes.append(int(node_str))
+                elif elem_type == 'SOLID':
+                    for node_str in data[1:]:
+                        if node_str:
+                            nodes.append(int(node_str))
                 if nodes:
                     self.elements[elem_id] = SimpleNamespace(
                         id=elem_id,
